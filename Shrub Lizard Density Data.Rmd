@@ -1,0 +1,116 @@
+---
+title: "Shrub-Lizard Data Method 2 Test Repo"
+author: "Mario"
+date: '2021-03-31' 
+output: html_document
+---
+###The following is a test repo to connect the density of shrub individuals within the Carrizo Plain National Monument to the data collected from the Lizard Telemetry Project.
+
+```{r}
+library(data.table)
+library(sp)
+library(rgdal)
+library(ggplot2)
+```
+```{r}
+shrub_dat = fread("Untitled_layer.csv")
+shrub_dat = as.data.table(shrub_dat)
+```
+
+```{r}
+coordinates(shrub_dat) = c("x", "y")
+crs.geo1 = CRS("+proj=longlat")
+proj4string(shrub_dat) = crs.geo1
+
+plot(shrub_dat, pch = 20, col = "steelblue")
+```
+```{r}
+carrizo = readOGR(dsn = path.expand("mygeodata"),layer = "Untitled_Project_1-polygon")
+```
+```{r}
+plot(carrizo)
+points(shrub_dat, pch = 20, col = "orange")
+```
+```{r}
+library(ggmap)
+library(geosphere)
+shrubs <- read.csv("Shrubs.csv")
+lizard <- read.csv("Lizards.csv")
+lizards <- read.csv("tidy_telemetry_Carrizo.csv")
+
+register_google(key="AIzaSyBurG6FR6I4uc_nRUr6TY118dCsnM0tsiE")
+carrizo <- get_map(location = c(lon = -119.62, lat = 35.11941), zoom = 14, maptype = "satellite")
+carrizo
+site.wide.map <- ggmap(carrizo)
+site.wide.map <- site.wide.map +
+  geom_point(data=shrubs, aes(x=X, y=Y, color = Site), alpha = 1, size =0.1, shape = 0, color = "green", show.legend = FALSE) +
+  labs(x = "longitude", y = "latitude") + theme(axis.title.x = element_blank()) + theme(axis.title.y = element_blank())
+site.wide.map <- site.wide.map +
+  geom_point(data=lizards, aes(x=long, y=lat, color = Site), alpha = 1, size =0.1, shape = 0, color = "red", show.legend = FALSE) +
+  labs(x = "longitude", y = "latitude") + theme(axis.title.x = element_blank()) + theme(axis.title.y = element_blank())
+site.wide.map
+##Generating the map with the datasets is easy. Finding the number of individuals per area is thr tricky part now.
+```
+```{r}
+#Ok so this works for ONE SPECIFIC POINT! Now how do i make it work for an entire dataset...
+coord <- cbind("longitude" = shrubs$X, "latitude" = shrubs$Y)
+coordliz <- cbind("longitude" =  lizards$long, "latitude" = lizards$lat)
+str(coord)
+str(coordliz)
+coord_df <- data.frame(coord, 
+                       within_5m = geosphere::distHaversine(
+                           coord, 
+                           c(-119.6290589,	35.12090732)
+                       ) < 5 )  
+str(coord_df$within_5km)
+table(coord_df$within_5km)
+```
+
+```{r}
+###Trying with buffers
+library(rgeos)
+library(raster)
+library(sf)
+library(sp)
+geoliz = st_as_sf(lizards,coords=c("long","lat"))
+geoshrubs = st_as_sf(shrubs,coords=c("X", "Y"))
+st_crs(geoliz) = st_crs(geoshrubs)
+
+geoliz_km <- geoliz %>% st_set_crs(4326) %>% st_transform("+proj=utm +zone=11 +datum=WGS84 +units=km")
+geoshrubs_km <- geoshrubs %>% st_set_crs(4326) %>% st_transform("+proj=utm +zone=11 +datum=WGS84 +units=km")
+```
+```{r}
+liz_buffer = st_buffer(geoliz_km, 1)
+liz_shrubs = st_intersection(liz_buffer, geoshrubs_km)
+```
+```{r}
+dim(liz_shrubs)
+liz_shrubs$area = st_area(liz_shrubs)
+```
+```{r}
+###Trying with Polygons
+library(sp)
+library(rgdal)
+radius <- 0.0002
+yPlus <- lizards$lat+radius
+yMinus <- lizards$lat-radius
+xPlus <- lizards$long+radius
+xMinus <- lizards$long-radius
+
+square=cbind(xMinus,yPlus,
+             xPlus,yMinus,
+             xMinus,yMinus,
+             xMinus,yPlus)
+
+ID = lizards$relocation_ID
+
+polys <- SpatialPolygons(mapply(function(poly, id) 
+        {
+      xy <- matrix(poly, ncol=2, byrow=TRUE)
+      Polygons(list(Polygon(xy)), ID=id)
+      }, 
+    split(square, row(square)), ID),
+    proj4string=CRS(as.character("+proj=utm +zone=11 +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0")))
+
+plot(polys)
+```
